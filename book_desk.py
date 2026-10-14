@@ -506,8 +506,40 @@ def api_checkin(token: str) -> bool:
         next_slot = result["StartDateNextBooking"]
         print(f"nessun booking attivo ora. Prossimo: {next_slot[:16]}")
         return False
+    if result.get("BookingId") is None:
+        print("nessuna prenotazione trovata per questa scrivania.")
+        _print_todays_bookings(token)
+        return False
     print(f"risposta: {result}")
     return False
+
+
+def _print_todays_bookings(token: str) -> None:
+    """Elenca le prenotazioni di oggi dell'utente per capire perche il check-in non trova nulla."""
+    headers = {"authorization": f"bearer {token}"}
+    today = date.today().isoformat()
+    for date_param in (today, f"{today}T00:00:00", "undefined"):
+        try:
+            resp = requests.get(f"{API_URL}/Booking/GetBookingByDay?currentDate={date_param}",
+                                headers=headers, timeout=10)
+            bookings = resp.json() if resp.status_code == 200 else None
+        except Exception:
+            continue
+        if isinstance(bookings, list):
+            break
+    else:
+        return
+    if not bookings:
+        print("    Oggi non risulta nessuna prenotazione. Prenota dal menu [1] e riprova.")
+        return
+    print("    Prenotazioni di oggi:")
+    for bk in bookings:
+        name  = bk.get("Desk_Name") or bk.get("MeetingRoom_Name") or "?"
+        start = str(bk.get("StartDate", ""))[11:16]
+        end   = str(bk.get("EndDate", ""))[11:16]
+        print(f"      - {name}  {start}-{end}")
+    print(f"    Il check-in e configurato su {DESK_LABEL} ({DESK_QR_CODE}): "
+          "se e diversa dalla scrivania prenotata, rilancia [6] Configura scrivania.")
 
 
 # ═══════════════════════════════════════════════════════════
