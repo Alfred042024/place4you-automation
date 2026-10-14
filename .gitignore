@@ -1,0 +1,10 @@
+# Sessione Microsoft SSO (contiene cookie/token - NON committare)
+auth_state.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Playwright
+.playwright/
