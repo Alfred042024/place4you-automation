@@ -58,8 +58,11 @@ def load_config():
     global DESK_LABEL, DESK_ID, FLOOR_ID, ROOM_ID, COMPANY_ID, BUILD_ID, DESK_QR_CODE
     if not CONFIG_FILE.exists():
         return
-    with open(CONFIG_FILE) as f:
-        cfg = json.load(f)
+    try:
+        with open(CONFIG_FILE) as f:
+            cfg = json.load(f)
+    except (json.JSONDecodeError, ValueError):
+        return
     BASE_URL     = cfg.get("base_url",     BASE_URL)
     UI_URL       = f"{BASE_URL}/ui/frontoffice"
     API_URL      = f"{BASE_URL}/api"

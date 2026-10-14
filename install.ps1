@@ -142,7 +142,7 @@ Write-Host ""
 $configPath = Join-Path $InstallDir "desk_config.json"
 if ($Url -and -not (Test-Path $configPath)) {
     Write-Step "Pre-configurazione URL: $Url"
-    "{`"base_url`":`"$Url`"}" | Set-Content $configPath -Encoding UTF8
+    [PSCustomObject]@{ base_url = $Url } | ConvertTo-Json -Compress | Set-Content $configPath -Encoding UTF8
     Write-Ok "URL impostato."
 }
 
