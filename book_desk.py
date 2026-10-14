@@ -174,13 +174,24 @@ def _parse_qr(raw: str) -> str | None:
 
 def _try_autodiscover(token: str, desk_id: int, qr_code: str) -> dict:
     """
-    Ritorna un dict con le chiavi trovate tra: desk_name, floor_id, room_id.
+    Scopre automaticamente: desk_name, company_id, build_id, floor_id, room_id.
     Usa endpoint confermati dalla ricognizione API.
     """
     headers = {"authorization": f"bearer {token}"}
     result  = {}
 
-    # 1. checkQrCode → Desk_Name confermato (sempre attivo)
+    # 1. GetUserLogged → company_id (sempre disponibile dopo il login)
+    try:
+        resp = requests.get(f"{API_URL}/user/GetUserLogged",
+                            headers=headers, timeout=8)
+        if resp.status_code == 200:
+            d = resp.json()
+            if d.get("Company_Id"):
+                result["company_id"] = int(d["Company_Id"])
+    except Exception:
+        pass
+
+    # 2. checkQrCode → desk_name
     try:
         resp = requests.get(f"{API_URL}/Booking/checkQrCode?qrCode={qr_code}",
                             headers=headers, timeout=8)
@@ -191,7 +202,7 @@ def _try_autodiscover(token: str, desk_id: int, qr_code: str) -> dict:
     except Exception:
         pass
 
-    # 2. GetBookingByDay → Floor_Id / Room_Id dal booking dell'utente
+    # 3. GetBookingByDay → floor_id, room_id, build_id dal booking esistente
     today = date.today().isoformat()
     for date_param in [today, f"{today}T00:00:00", "undefined"]:
         try:
@@ -205,12 +216,11 @@ def _try_autodiscover(token: str, desk_id: int, qr_code: str) -> dict:
                 continue
             for b in bookings:
                 if b.get("Desk_Id") == desk_id:
-                    fid = b.get("Floor_Id") or b.get("FloorId")
-                    rid = b.get("Room_Id")  or b.get("RoomId")
-                    if fid:
-                        result["floor_id"] = int(fid)
-                    if rid:
-                        result["room_id"] = int(rid)
+                    for src, dst in [("Floor_Id","floor_id"), ("FloorId","floor_id"),
+                                     ("Room_Id", "room_id"),  ("RoomId", "room_id"),
+                                     ("Build_Id","build_id"), ("BuildId","build_id")]:
+                        if b.get(src) and dst not in result:
+                            result[dst] = int(b[src])
                     break
         except Exception:
             pass
@@ -279,6 +289,8 @@ async def setup_wizard(playwright):
     # Auto-discovery via API
     floor_id   = FLOOR_ID
     room_id    = ROOM_ID
+    company_id = COMPANY_ID
+    build_id   = BUILD_ID
     desk_label = qr_raw
 
     if AUTH_FILE.exists():
@@ -292,7 +304,11 @@ async def setup_wizard(playwright):
                 floor_id = info["floor_id"]
             if info.get("room_id"):
                 room_id = info["room_id"]
-            found = [k for k in ("desk_name", "floor_id", "room_id") if k in info]
+            if info.get("company_id"):
+                company_id = info["company_id"]
+            if info.get("build_id"):
+                build_id = info["build_id"]
+            found = [k for k in ("desk_name", "company_id", "build_id", "floor_id", "room_id") if k in info]
             print(f"OK  ({', '.join(found) if found else 'nessun campo'})")
         else:
             print("sessione non disponibile, uso default")
@@ -307,8 +323,8 @@ async def setup_wizard(playwright):
         "desk_id":      desk_id,
         "floor_id":     floor_id,
         "room_id":      room_id,
-        "company_id":   COMPANY_ID,
-        "build_id":     BUILD_ID,
+        "company_id":   company_id,
+        "build_id":     build_id,
         "desk_qr_code": qr_raw,
     }
 

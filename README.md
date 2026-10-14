@@ -113,7 +113,7 @@ Al primo avvio (`--setup`) viene creato `desk_config.json` (gitignored) con i de
 }
 ```
 
-Il nome e l'ID scrivania vengono rilevati automaticamente dalla webcam (QR code) e dall'API Place4You. L'URL, `company_id` e `build_id` vengono chiesti durante il setup; tutti i valori sono modificabili manualmente nel file dopo la configurazione.
+Nome scrivania, `company_id`, `build_id`, `floor_id` e `room_id` vengono rilevati automaticamente dall'API Place4You dopo il QR scan. L'unica cosa richiesta interattivamente è l'URL dell'istanza (se non già pre-configurato con `-Url`). Tutti i valori sono modificabili manualmente nel file dopo la configurazione.
 
 ---
 
