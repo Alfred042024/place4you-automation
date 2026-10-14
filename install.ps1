@@ -6,7 +6,11 @@
     Scarica la repo, installa uv se mancante, crea il collegamento
     sul desktop e avvia il wizard di configurazione scrivania.
 .EXAMPLE
+    # Generico (chiede l'URL durante il setup):
     irm https://raw.githubusercontent.com/Alfred042024/place4you-automation/master/install.ps1 | iex
+
+    # Con URL pre-configurato (nessuna domanda sull'URL):
+    $env:P4Y_URL="https://p4y.tuaazienda.it"; irm https://raw.githubusercontent.com/Alfred042024/place4you-automation/master/install.ps1 | iex
 #>
 
 $RepoUrl    = "https://github.com/Alfred042024/place4you-automation.git"
@@ -127,10 +131,13 @@ Write-Host "  Avvio il wizard di configurazione..." -ForegroundColor White
 Write-Host "  Tieni pronto il cartellino con il QR della tua scrivania." -ForegroundColor Yellow
 Write-Host ""
 
-# Pre-compila desk_config.json con l'URL Alveo cosi il wizard non lo chiede
+# Se P4Y_URL e definito (passato prima del pipe), pre-compila la config
+# cosi il wizard non chiede l'URL interattivamente
 $configPath = Join-Path $InstallDir "desk_config.json"
-if (-not (Test-Path $configPath)) {
-    '{"base_url":"https://p4y.alveo.it"}' | Set-Content $configPath -Encoding UTF8
+if ($env:P4Y_URL -and -not (Test-Path $configPath)) {
+    Write-Step "Pre-configurazione URL: $($env:P4Y_URL)"
+    "{`"base_url`":`"$($env:P4Y_URL)`"}" | Set-Content $configPath -Encoding UTF8
+    Write-Ok "URL impostato."
 }
 
 Start-Sleep -Seconds 2

@@ -24,7 +24,14 @@
 Apri **PowerShell** e incolla:
 
 ```powershell
+# Generico — chiede l'URL Place4You durante il setup
 irm https://raw.githubusercontent.com/Alfred042024/place4you-automation/master/install.ps1 | iex
+```
+
+Se il tuo amministratore ti ha fornito un URL pre-configurato, usa invece il comando che ti ha mandato, che avrà questa forma:
+
+```powershell
+$env:P4Y_URL="https://p4y.tuaazienda.it"; irm https://raw.githubusercontent.com/Alfred042024/place4you-automation/master/install.ps1 | iex
 ```
 
 Lo script installa tutto da zero:
