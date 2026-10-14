@@ -74,6 +74,34 @@ def save_config(cfg: dict):
     print(f"  Config salvata in {CONFIG_FILE.name}")
 
 
+def _decode_frame(detector, frame):
+    """Prova più strategie per decodificare un QR blu su sfondo bianco/chiaro."""
+    import cv2
+    import numpy as np
+
+    candidates = []
+
+    # 1. Canale rosso invertito: pixel blu → basso in rosso → nero dopo inversione.
+    #    Dà contrasto ottimale per QR blu su bianco.
+    red = frame[:, :, 2]
+    _, red_bin = cv2.threshold(red, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    candidates.append(red_bin)
+
+    # 2. Scala di grigi con contrasto aumentato (CLAHE)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    candidates.append(clahe.apply(gray))
+
+    # 3. Scala di grigi semplice
+    candidates.append(gray)
+
+    for img in candidates:
+        data, _, _ = detector.detectAndDecode(img)
+        if data:
+            return data.strip()
+    return None
+
+
 def scan_qr_from_camera() -> str | None:
     """Apre la webcam e rileva il QR code della scrivania. Ritorna la stringa QR o None."""
     import cv2
@@ -84,7 +112,7 @@ def scan_qr_from_camera() -> str | None:
 
     detector = cv2.QRCodeDetector()
     print("  Inquadra il QR code della scrivania...")
-    print("  Premi  Q  per annullare.")
+    print("  Premi  Q  per confermare / annullare.")
     found = None
 
     while True:
@@ -92,14 +120,15 @@ def scan_qr_from_camera() -> str | None:
         if not ret:
             break
 
-        data, _, _ = detector.detectAndDecode(frame)
+        display = frame.copy()
+        data = _decode_frame(detector, frame)
+
         if data:
             found = data.strip()
-            label = f"Trovato: {found}  (premi Q per confermare)"
-            cv2.putText(frame, label, (10, 35),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 0), 2)
+            cv2.putText(display, f"Trovato: {found}  (premi Q)",
+                        (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 0), 2)
 
-        cv2.imshow("Place4You - Scansiona QR (Q = conferma/esci)", frame)
+        cv2.imshow("Place4You - Scansiona QR  (Q = conferma/esci)", display)
 
         key = cv2.waitKey(1) & 0xFF
         if key in (ord("q"), ord("Q"), 27):
