@@ -6,24 +6,20 @@
 # ]
 # ///
 """
-Place4You - Automazione prenotazione + check-in scrivania ABS16
-================================================================
+Place4You - Automazione prenotazione + check-in scrivania
+=========================================================
 USO (via uv):
+    uv run book_desk.py --setup           # Configura la tua scrivania (una tantum)
     uv run book_desk.py --login           # Login SSO Microsoft (una tantum)
     uv run book_desk.py --book            # Prenota prossimo giorno lavorativo
     uv run book_desk.py --book --today    # Prenota oggi
     uv run book_desk.py --book --days 7   # Prenota i prossimi 7 giorni lavorativi
     uv run book_desk.py --book --days 30  # Prenota i prossimi 30 giorni lavorativi
     uv run book_desk.py --checkin         # Check-in oggi
-
-Meccanismo di auth:
-    L'app usa Angular con interceptor: 'authorization: bearer <token>'
-    dove il token si trova in sessionStorage['token'] dopo il login SSO.
-    Playwright carica la home per inizializzare Angular e leggere il token;
-    da quel punto tutto avviene via requests (no UI automation).
 """
 
 import asyncio
+import json
 import sys
 import requests
 from datetime import date, time, datetime, timedelta
@@ -31,7 +27,7 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 
 # ═══════════════════════════════════════════════════════════
-#  CONFIGURAZIONE
+#  DEFAULTS (sovrascritti da desk_config.json se presente)
 # ═══════════════════════════════════════════════════════════
 
 BASE_URL     = "https://p4y.alveo.it"
@@ -46,27 +42,144 @@ COMPANY_ID   = 103
 BUILD_ID     = 127
 DESK_QR_CODE = "D_4648"
 
-# Orario: "09:00-18:00" oppure "09:00-13:00" oppure "14:00-18:00"
 TIME_START   = time(9, 0)
 TIME_END     = time(18, 0)
 
 AUTH_FILE    = Path(__file__).parent / "auth_state.json"
+CONFIG_FILE  = Path(__file__).parent / "desk_config.json"
 
 # ═══════════════════════════════════════════════════════════
-#  UTILITÀ
+#  CONFIGURAZIONE PER SCRIVANIA
 # ═══════════════════════════════════════════════════════════
 
-def working_days_from(start: date, n: int) -> list[date]:
-    days, d = [], start
-    while len(days) < n:
-        if d.weekday() < 5:
-            days.append(d)
-        d += timedelta(days=1)
-    return days
+def load_config():
+    global DESK_LABEL, DESK_ID, FLOOR_ID, ROOM_ID, COMPANY_ID, BUILD_ID, DESK_QR_CODE
+    if not CONFIG_FILE.exists():
+        return
+    with open(CONFIG_FILE) as f:
+        cfg = json.load(f)
+    DESK_LABEL   = cfg.get("desk_label",   DESK_LABEL)
+    DESK_ID      = cfg.get("desk_id",      DESK_ID)
+    FLOOR_ID     = cfg.get("floor_id",     FLOOR_ID)
+    ROOM_ID      = cfg.get("room_id",      ROOM_ID)
+    COMPANY_ID   = cfg.get("company_id",   COMPANY_ID)
+    BUILD_ID     = cfg.get("build_id",     BUILD_ID)
+    DESK_QR_CODE = cfg.get("desk_qr_code", DESK_QR_CODE)
 
 
-def _session_expired(page) -> bool:
-    return "microsoftonline.com" in page.url
+def save_config(cfg: dict):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
+    print(f"  Config salvata in {CONFIG_FILE.name}")
+
+
+def _try_autodiscover(token: str, desk_id: int) -> tuple[int, int] | None:
+    """Prova endpoint noti per recuperare floor/room ID dalla scrivania."""
+    candidates = [
+        f"{API_URL}/Desk/GetById/{desk_id}",
+        f"{API_URL}/Desk/Get?id={desk_id}",
+        f"{API_URL}/Desk/{desk_id}",
+        f"{API_URL}/Desk/GetInfo?deskId={desk_id}",
+    ]
+    headers = {"authorization": f"bearer {token}"}
+    for url in candidates:
+        try:
+            resp = requests.get(url, headers=headers, timeout=8)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, dict):
+                    fid = data.get("FloorId") or data.get("Floor_Id")
+                    rid = data.get("RoomId")  or data.get("Room_Id")
+                    if fid and rid:
+                        return int(fid), int(rid)
+        except Exception:
+            pass
+    return None
+
+
+async def setup_wizard(playwright):
+    print("")
+    print("  ╔══════════════════════════════════════╗")
+    print("  ║   SETUP - Configura la tua scrivania ║")
+    print("  ╚══════════════════════════════════════╝")
+    print("")
+    print("  Trova il codice QR stampato sulla tua scrivania.")
+    print("  Ha il formato  D_XXXX  (es. D_4648).")
+    print("")
+
+    qr_raw = input("  Codice QR: ").strip().upper()
+    if not qr_raw.startswith("D_"):
+        print("  [!] Formato non valido. Deve iniziare con D_")
+        return
+    try:
+        desk_id = int(qr_raw[2:])
+    except ValueError:
+        print("  [!] QR code non valido.")
+        return
+
+    desk_label = input("  Nome scrivania (es. PA ABS - ABS16) [invio per usare il QR]: ").strip()
+    if not desk_label:
+        desk_label = qr_raw
+
+    # Prova auto-discovery floor/room
+    floor_id = FLOOR_ID
+    room_id  = ROOM_ID
+    auto_ok  = False
+
+    if AUTH_FILE.exists():
+        print("")
+        print("  Recupero dettagli scrivania dal server...", end=" ", flush=True)
+        token = await get_token(playwright)
+        if token:
+            result = _try_autodiscover(token, desk_id)
+            if result:
+                floor_id, room_id = result
+                auto_ok = True
+                print(f"OK  (Floor={floor_id}, Room={room_id})")
+            else:
+                print("non trovati automaticamente.")
+        else:
+            print("sessione non disponibile.")
+
+    if not auto_ok:
+        print("")
+        print("  Floor ID e Room ID non rilevati automaticamente.")
+        print("  Per trovarli: apri Place4You in Chrome, fai F12 -> Network,")
+        print("  prenota una volta e cerca la chiamata a /api/Booking/Insert.")
+        print(f"  (default attuali: Floor={floor_id}, Room={room_id})")
+        print("")
+        fi = input(f"  Floor ID [{floor_id}]: ").strip()
+        ri = input(f"  Room ID  [{room_id}]: ").strip()
+        if fi:
+            floor_id = int(fi)
+        if ri:
+            room_id = int(ri)
+
+    cfg = {
+        "desk_label":   desk_label,
+        "desk_id":      desk_id,
+        "floor_id":     floor_id,
+        "room_id":      room_id,
+        "company_id":   COMPANY_ID,
+        "build_id":     BUILD_ID,
+        "desk_qr_code": qr_raw,
+    }
+
+    print("")
+    print("  ┌─────────────────────────────────────┐")
+    print("  │  Riepilogo configurazione           │")
+    print("  ├─────────────────────────────────────┤")
+    for k, v in cfg.items():
+        print(f"  │  {k:<14} {str(v):<22}│")
+    print("  └─────────────────────────────────────┘")
+    print("")
+
+    confirm = input("  Salvare? [S/N]: ").strip().upper()
+    if confirm == "S":
+        save_config(cfg)
+        print("  Setup completato! Esegui ora il Login SSO.")
+    else:
+        print("  Setup annullato.")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -98,7 +211,7 @@ async def get_token(playwright) -> str | None:
     page    = await context.new_page()
     try:
         await page.goto(f"{UI_URL}/home", wait_until="networkidle")
-        if _session_expired(page):
+        if "microsoftonline.com" in page.url:
             print("Sessione scaduta -> esegui: uv run book_desk.py --login")
             return None
         token = await page.evaluate("() => sessionStorage.getItem('token')")
@@ -123,7 +236,6 @@ def _headers(token: str) -> dict:
 
 
 def api_book(token: str, target_date: date) -> bool:
-    """Prenota la scrivania per la data indicata tramite POST /api/Booking/Insert."""
     start = datetime.combine(target_date, TIME_START).strftime("%Y-%m-%dT%H:%M:%S")
     end   = datetime.combine(target_date, TIME_END).strftime("%Y-%m-%dT%H:%M:%S")
     payload = {
@@ -157,7 +269,6 @@ def api_book(token: str, target_date: date) -> bool:
 
 
 def api_checkin(token: str) -> bool:
-    """Check-in tramite GET /api/Booking/checkQrCode."""
     print(f"Check-in {DESK_LABEL} (QR: {DESK_QR_CODE})...", end=" ")
     url  = f"{API_URL}/Booking/checkQrCode?qrCode={DESK_QR_CODE}"
     resp = requests.get(url, headers={"authorization": f"bearer {token}"}, timeout=15)
@@ -187,12 +298,28 @@ def api_checkin(token: str) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════
+#  UTILITÀ
+# ═══════════════════════════════════════════════════════════
+
+def working_days_from(start: date, n: int) -> list[date]:
+    days, d = [], start
+    while len(days) < n:
+        if d.weekday() < 5:
+            days.append(d)
+        d += timedelta(days=1)
+    return days
+
+
+# ═══════════════════════════════════════════════════════════
 #  MAIN
 # ═══════════════════════════════════════════════════════════
 
 async def main():
+    load_config()
+
     args = sys.argv[1:]
 
+    setup_mode   = "--setup"   in args
     login_mode   = "--login"   in args
     book_mode    = "--book"    in args
     checkin_mode = "--checkin" in args
@@ -207,17 +334,25 @@ async def main():
             print("Usa: --days <numero>  (es. --days 7)")
             sys.exit(1)
 
-    if not any([login_mode, book_mode, checkin_mode]):
+    if not any([setup_mode, login_mode, book_mode, checkin_mode]):
         book_mode    = True
         checkin_mode = True
 
     async with async_playwright() as pw:
 
+        if setup_mode:
+            await setup_wizard(pw)
+            return
+
         if login_mode:
             await login_and_save(pw)
             return
 
-        # Per book e checkin serve il token
+        if not CONFIG_FILE.exists():
+            print("[!] Nessuna configurazione trovata.")
+            print("    Esegui prima: uv run book_desk.py --setup")
+            sys.exit(1)
+
         token = await get_token(pw)
         if not token:
             sys.exit(1)

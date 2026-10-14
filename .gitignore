@@ -1,5 +1,6 @@
-# Sessione Microsoft SSO (contiene cookie/token - NON committare)
+# File locali per utente (NON committare)
 auth_state.json
+desk_config.json
 
 # Python
 __pycache__/

@@ -71,6 +71,11 @@ function Do-Checkin {
     Run-Py "--checkin"
 }
 
+function Do-Setup {
+    Write-Host "  Avvio wizard configurazione scrivania..." -ForegroundColor Magenta
+    Run-Py "--setup"
+}
+
 function Show-Menu {
     Write-Title
     Write-Host "  Cosa vuoi fare?" -ForegroundColor White
@@ -80,6 +85,7 @@ function Show-Menu {
     Write-Host "  [3] Prenota 30 giorni lavorativi" -ForegroundColor Green
     Write-Host "  [4] Check-in oggi" -ForegroundColor Yellow
     Write-Host "  [5] Login SSO (primo setup o sessione scaduta)" -ForegroundColor Magenta
+    Write-Host "  [6] Configura scrivania (prima installazione)" -ForegroundColor DarkCyan
     Write-Host "  [Q] Esci" -ForegroundColor DarkGray
     Write-Host ""
     $choice = Read-Host "  Scelta"
@@ -90,6 +96,7 @@ function Show-Menu {
         "3"     { Do-Book30 }
         "4"     { Do-Checkin }
         "5"     { Do-Login }
+        "6"     { Do-Setup }
         "Q"     { return }
         default { Write-Host "  Scelta non valida." -ForegroundColor Red; Show-Menu; return }
     }
@@ -106,5 +113,6 @@ switch ($Action.ToLower()) {
     "book1"   { Write-Title; Do-BookToday }
     "book7"   { Write-Title; Do-Book7 }
     "book30"  { Write-Title; Do-Book30 }
+    "setup"   { Write-Title; Do-Setup }
     default   { Show-Menu }
 }
