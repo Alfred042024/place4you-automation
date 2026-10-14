@@ -2,19 +2,34 @@
 
 Script per prenotare e fare il check-in della propria scrivania su [Place4You (p4y.alveo.it)](https://p4y.alveo.it) senza dover aprire il browser ogni volta.
 
-## Prerequisiti
+## Installazione (un solo comando)
+
+Apri **PowerShell** e incolla:
+
+```powershell
+irm https://raw.githubusercontent.com/Alfred042024/place4you-automation/master/install.ps1 | iex
+```
+
+Lo script:
+1. Installa **uv** se non presente
+2. Scarica questo repository in `%USERPROFILE%\place4you-automation`
+3. Installa Chromium per Playwright
+4. Crea il collegamento **Place4You** sul desktop
+5. Avvia il wizard di configurazione → inquadri il QR della tua scrivania con la webcam
+6. Chiede di fare il login SSO Microsoft
+
+Dopo l'installazione usa il collegamento sul desktop.
+
+---
+
+## Setup manuale (alternativa)
+
+### Prerequisiti
 
 - **Windows 10/11**
 - [**uv**](https://docs.astral.sh/uv/getting-started/installation/) — gestore Python ultrarapido
-  ```
-  winget install astral-sh.uv
-  ```
-  oppure:
-  ```
-  powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-  ```
 
-## Setup per una nuova scrivania
+### Setup per una nuova scrivania
 
 1. Clona o scarica questo repository.
 

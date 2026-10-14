@@ -168,56 +168,52 @@ def _parse_qr(raw: str) -> str | None:
     return None
 
 
-def _extract_ids(data) -> tuple[int, int] | None:
-    """Estrae (floor_id, room_id) da un dict o lista di dict."""
-    if isinstance(data, list):
-        data = data[0] if data else {}
-    if not isinstance(data, dict):
-        return None
-    fid = (data.get("FloorId") or data.get("Floor_Id") or
-           data.get("floorId") or data.get("floor_id"))
-    rid = (data.get("RoomId")  or data.get("Room_Id")  or
-           data.get("roomId")  or data.get("room_id"))
-    if fid and rid:
-        return int(fid), int(rid)
-    return None
-
-
-def _try_autodiscover(token: str, desk_id: int) -> tuple[int, int] | None:
-    """Prova più endpoint per recuperare floor/room ID della scrivania."""
-    qr = f"D_{desk_id}"
+def _try_autodiscover(token: str, desk_id: int, qr_code: str) -> dict:
+    """
+    Ritorna un dict con le chiavi trovate tra: desk_name, floor_id, room_id.
+    Usa endpoint confermati dalla ricognizione API.
+    """
     headers = {"authorization": f"bearer {token}"}
+    result  = {}
 
-    candidates = [
-        # checkQrCode — endpoint sicuramente attivo, risposta può contenere i campi
-        f"{API_URL}/Booking/checkQrCode?qrCode={qr}",
-        # Booking attivo per l'utente
-        f"{API_URL}/Booking/GetActive",
-        f"{API_URL}/Booking/GetUserBookings",
-        f"{API_URL}/Booking/GetByUser",
-        # Desk info diretta
-        f"{API_URL}/Desk/GetById/{desk_id}",
-        f"{API_URL}/Desk/Get?id={desk_id}",
-        f"{API_URL}/Desk/{desk_id}",
-        f"{API_URL}/Desk/GetInfo?deskId={desk_id}",
-        f"{API_URL}/Desk/GetByQr?qrCode={qr}",
-    ]
+    # 1. checkQrCode → Desk_Name confermato (sempre attivo)
+    try:
+        resp = requests.get(f"{API_URL}/Booking/checkQrCode?qrCode={qr_code}",
+                            headers=headers, timeout=8)
+        if resp.status_code == 200:
+            d = resp.json()
+            if d.get("Desk_Name"):
+                result["desk_name"] = d["Desk_Name"]
+    except Exception:
+        pass
 
-    for url in candidates:
+    # 2. GetBookingByDay → Floor_Id / Room_Id dal booking dell'utente
+    today = date.today().isoformat()
+    for date_param in [today, f"{today}T00:00:00", "undefined"]:
         try:
-            resp = requests.get(url, headers=headers, timeout=8)
+            resp = requests.get(
+                f"{API_URL}/Booking/GetBookingByDay?currentDate={date_param}",
+                headers=headers, timeout=8)
             if resp.status_code != 200:
                 continue
-            try:
-                data = resp.json()
-            except Exception:
+            bookings = resp.json()
+            if not isinstance(bookings, list):
                 continue
-            ids = _extract_ids(data)
-            if ids:
-                return ids
+            for b in bookings:
+                if b.get("Desk_Id") == desk_id:
+                    fid = b.get("Floor_Id") or b.get("FloorId")
+                    rid = b.get("Room_Id")  or b.get("RoomId")
+                    if fid:
+                        result["floor_id"] = int(fid)
+                    if rid:
+                        result["room_id"] = int(rid)
+                    break
         except Exception:
             pass
-    return None
+        if "floor_id" in result:
+            break
+
+    return result
 
 
 async def setup_wizard(playwright):
@@ -262,26 +258,30 @@ async def setup_wizard(playwright):
         print("  [!] QR code non valido.")
         return
 
-    desk_label = input(f"  Nome scrivania (es. ABS17) [{qr_raw}]: ").strip()
-    if not desk_label:
-        desk_label = qr_raw
-
-    # Prova auto-discovery floor/room; se fallisce usa i default silenziosamente
-    floor_id = FLOOR_ID
-    room_id  = ROOM_ID
+    # Auto-discovery via API
+    floor_id   = FLOOR_ID
+    room_id    = ROOM_ID
+    desk_label = qr_raw
 
     if AUTH_FILE.exists():
         print("  Recupero dettagli dal server...", end=" ", flush=True)
         token = await get_token(playwright)
         if token:
-            result = _try_autodiscover(token, desk_id)
-            if result:
-                floor_id, room_id = result
-                print(f"OK  (Floor={floor_id}, Room={room_id})")
-            else:
-                print(f"uso default (Floor={floor_id}, Room={room_id})")
+            info = _try_autodiscover(token, desk_id, qr_raw)
+            if info.get("desk_name"):
+                desk_label = info["desk_name"]
+            if info.get("floor_id"):
+                floor_id = info["floor_id"]
+            if info.get("room_id"):
+                room_id = info["room_id"]
+            found = [k for k in ("desk_name", "floor_id", "room_id") if k in info]
+            print(f"OK  ({', '.join(found) if found else 'nessun campo'})")
         else:
-            print(f"sessione non disponibile, uso default (Floor={floor_id}, Room={room_id})")
+            print("sessione non disponibile, uso default")
+
+    confirmed = input(f"  Nome scrivania [{desk_label}]: ").strip()
+    if confirmed:
+        desk_label = confirmed
 
     cfg = {
         "desk_label":   desk_label,
