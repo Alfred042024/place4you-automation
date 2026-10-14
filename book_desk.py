@@ -210,30 +210,38 @@ def _try_autodiscover(token: str, desk_id: int, qr_code: str) -> dict:
     except Exception:
         pass
 
-    # 3. GetBookingByDay → floor_id, room_id, build_id dal booking esistente
-    today = date.today().isoformat()
-    for date_param in [today, f"{today}T00:00:00", "undefined"]:
+    # 3. Piani prenotabili → scrivanie del piano → match per Id: floor/room/build/company.
+    #    Serve una data in cui l'utente non ha gia una prenotazione (altrimenti il
+    #    server risponde 500), quindi si prova con i prossimi giorni.
+    for offset in range(1, 15):
+        day = date.today() + timedelta(days=offset)
+        qs = (f"startDate={day.isoformat()}T07:00:00.000Z"
+              f"&endDate={day.isoformat()}T16:00:00.000Z&type=1")
         try:
-            resp = requests.get(
-                f"{API_URL}/Booking/GetBookingByDay?currentDate={date_param}",
-                headers=headers, timeout=8)
+            resp = requests.get(f"{API_URL}/Booking/GetBookableFloors?{qs}",
+                                headers=headers, timeout=10)
             if resp.status_code != 200:
                 continue
-            bookings = resp.json()
-            if not isinstance(bookings, list):
-                continue
-            for b in bookings:
-                if b.get("Desk_Id") == desk_id:
-                    for src, dst in [("Floor_Id","floor_id"), ("FloorId","floor_id"),
-                                     ("Room_Id", "room_id"),  ("RoomId", "room_id"),
-                                     ("Build_Id","build_id"), ("BuildId","build_id")]:
-                        if b.get(src) and dst not in result:
-                            result[dst] = int(b[src])
-                    break
-        except Exception:
-            pass
-        if "floor_id" in result:
+            floor_ids = [f["Floor_Id"] for bld in resp.json()
+                         for f in bld.get("Floors", []) if not f.get("IsDisabled")]
+            for floor_id in floor_ids:
+                resp = requests.get(
+                    f"{API_URL}/Booking/GetBookableDesks?floorId={floor_id}&{qs}",
+                    headers=headers, timeout=15)
+                if resp.status_code != 200:
+                    continue
+                desk = next((d for d in resp.json() if d.get("Id") == desk_id), None)
+                if desk:
+                    for src, dst in [("Floor_Id", "floor_id"), ("Room_Id", "room_id"),
+                                     ("Build_Id", "build_id"), ("Company_Id", "company_id")]:
+                        if desk.get(src):
+                            result[dst] = int(desk[src])
+                    if desk.get("Name"):
+                        result["desk_name"] = desk["Name"]
+                    return result
             break
+        except Exception:
+            continue
 
     return result
 
