@@ -73,6 +73,10 @@ function Do-Setup {
     Run-Py "--setup"
 }
 
+function Do-Log {
+    Run-Py "--log"
+}
+
 function Show-Menu {
     Write-Title
     Write-Host "  Cosa vuoi fare?" -ForegroundColor White
@@ -83,6 +87,7 @@ function Show-Menu {
     Write-Host "  [4] Check-in oggi" -ForegroundColor Yellow
     Write-Host "  [5] Login SSO (primo setup o sessione scaduta)" -ForegroundColor Magenta
     Write-Host "  [6] Configura scrivania (prima installazione)" -ForegroundColor DarkCyan
+    Write-Host "  [7] Mostra log (diagnostica)" -ForegroundColor DarkGray
     Write-Host "  [Q] Esci" -ForegroundColor DarkGray
     Write-Host ""
     $choice = Read-Host "  Scelta"
@@ -94,6 +99,7 @@ function Show-Menu {
         "4"     { Do-Checkin }
         "5"     { Do-Login }
         "6"     { Do-Setup }
+        "7"     { Do-Log }
         "Q"     { return }
         default { Write-Host "  Scelta non valida." -ForegroundColor Red; Show-Menu; return }
     }
@@ -111,5 +117,6 @@ switch ($Action.ToLower()) {
     "book7"   { Write-Title; Do-Book7 }
     "book30"  { Write-Title; Do-Book30 }
     "setup"   { Write-Title; Do-Setup }
+    "log"     { Write-Title; Do-Log }
     default   { Show-Menu }
 }

@@ -18,15 +18,22 @@ USO (via uv):
     uv run book_desk.py --book --days 30  # Prenota i prossimi 30 giorni lavorativi
     uv run book_desk.py --checkin         # Check-in oggi
     uv run book_desk.py --install-browser # Installa Chromium per Playwright
+    uv run book_desk.py --log             # Mostra le ultime righe del log (p4y.log)
 """
 
 import asyncio
 import json
+import logging
+import logging.handlers
+import platform
 import sys
 import requests
 from datetime import date, time, datetime, timedelta
 from pathlib import Path
+from time import perf_counter
 from playwright.async_api import async_playwright
+
+VERSION = "1.2.0"
 
 # ═══════════════════════════════════════════════════════════
 #  DEFAULTS (sovrascritti da desk_config.json se presente)
@@ -51,6 +58,51 @@ TIME_END     = time(18, 0)
 
 AUTH_FILE    = Path(__file__).parent / "auth_state.json"
 CONFIG_FILE  = Path(__file__).parent / "desk_config.json"
+LOG_FILE     = Path(__file__).parent / "p4y.log"
+
+# ═══════════════════════════════════════════════════════════
+#  LOG (file locale p4y.log, mai token ne cookie)
+# ═══════════════════════════════════════════════════════════
+
+log = logging.getLogger("p4y")
+
+
+def setup_logging():
+    if log.handlers:
+        return
+    log.setLevel(logging.DEBUG)
+    try:
+        handler = logging.handlers.RotatingFileHandler(
+            LOG_FILE, maxBytes=200_000, backupCount=1, encoding="utf-8")
+    except OSError:
+        log.addHandler(logging.NullHandler())
+        return
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))
+    log.addHandler(handler)
+
+
+def show_log(lines: int = 60):
+    print(f"File di log: {LOG_FILE}")
+    if not LOG_FILE.exists():
+        print("(ancora vuoto)")
+        return
+    text = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+    print("\n".join(text[-lines:]))
+
+
+def _http(method: str, path: str, token: str, timeout: int = 15, **kw) -> requests.Response:
+    """Chiamata API con log di metodo, percorso, esito e durata (corpo solo se errore)."""
+    t0 = perf_counter()
+    try:
+        resp = requests.request(method, f"{API_URL}/{path}", timeout=timeout,
+                                headers={"authorization": f"bearer {token}"}, **kw)
+    except requests.exceptions.RequestException as e:
+        log.error("%s %s -> errore di rete: %s", method, path, e)
+        raise
+    detail = "" if resp.ok else " " + resp.text[:300].replace("\n", " ")
+    log.info("%s %s -> %s (%d ms)%s", method, path, resp.status_code,
+             (perf_counter() - t0) * 1000, detail)
+    return resp
 
 # ═══════════════════════════════════════════════════════════
 #  CONFIGURAZIONE PER SCRIVANIA
@@ -67,6 +119,7 @@ def load_config():
         if not isinstance(cfg, dict):
             raise ValueError("config non e un oggetto JSON")
     except (OSError, ValueError) as e:
+        log.error("config non leggibile: %s", e)
         print(f"[!] {CONFIG_FILE.name} non leggibile ({e}). Esegui: uv run book_desk.py --setup")
         return
     BASE_URL     = cfg.get("base_url",     BASE_URL).rstrip("/")
@@ -84,6 +137,7 @@ def load_config():
 def save_config(cfg: dict):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
+    log.info("config salvata: %s", cfg)
     print(f"  Config salvata in {CONFIG_FILE.name}")
 
 
@@ -185,30 +239,25 @@ def _try_autodiscover(token: str, desk_id: int, qr_code: str) -> dict:
     Scopre automaticamente: desk_name, company_id, build_id, floor_id, room_id.
     Usa endpoint confermati dalla ricognizione API.
     """
-    headers = {"authorization": f"bearer {token}"}
-    result  = {}
+    result = {}
+
+    def get_json(path: str, timeout: int):
+        try:
+            resp = _http("GET", path, token, timeout=timeout)
+            return resp.json() if resp.status_code == 200 else None
+        except Exception:
+            log.exception("autodiscover: %s", path)
+            return None
 
     # 1. GetUserLogged → company_id (sempre disponibile dopo il login)
-    try:
-        resp = requests.get(f"{API_URL}/user/GetUserLogged",
-                            headers=headers, timeout=8)
-        if resp.status_code == 200:
-            d = resp.json()
-            if d.get("Company_Id"):
-                result["company_id"] = int(d["Company_Id"])
-    except Exception:
-        pass
+    d = get_json("user/GetUserLogged", 8)
+    if isinstance(d, dict) and d.get("Company_Id"):
+        result["company_id"] = int(d["Company_Id"])
 
     # 2. checkQrCode → desk_name
-    try:
-        resp = requests.get(f"{API_URL}/Booking/checkQrCode?qrCode={qr_code}",
-                            headers=headers, timeout=8)
-        if resp.status_code == 200:
-            d = resp.json()
-            if d.get("Desk_Name"):
-                result["desk_name"] = d["Desk_Name"]
-    except Exception:
-        pass
+    d = get_json(f"Booking/checkQrCode?qrCode={qr_code}", 8)
+    if isinstance(d, dict) and d.get("Desk_Name"):
+        result["desk_name"] = d["Desk_Name"]
 
     # 3. Piani prenotabili → scrivanie del piano → match per Id: floor/room/build/company.
     #    Serve una data in cui l'utente non ha gia una prenotazione (altrimenti il
@@ -217,32 +266,27 @@ def _try_autodiscover(token: str, desk_id: int, qr_code: str) -> dict:
         day = date.today() + timedelta(days=offset)
         qs = (f"startDate={day.isoformat()}T07:00:00.000Z"
               f"&endDate={day.isoformat()}T16:00:00.000Z&type=1")
-        try:
-            resp = requests.get(f"{API_URL}/Booking/GetBookableFloors?{qs}",
-                                headers=headers, timeout=10)
-            if resp.status_code != 200:
-                continue
-            floor_ids = [f["Floor_Id"] for bld in resp.json()
-                         for f in bld.get("Floors", []) if not f.get("IsDisabled")]
-            for floor_id in floor_ids:
-                resp = requests.get(
-                    f"{API_URL}/Booking/GetBookableDesks?floorId={floor_id}&{qs}",
-                    headers=headers, timeout=15)
-                if resp.status_code != 200:
-                    continue
-                desk = next((d for d in resp.json() if d.get("Id") == desk_id), None)
-                if desk:
-                    for src, dst in [("Floor_Id", "floor_id"), ("Room_Id", "room_id"),
-                                     ("Build_Id", "build_id"), ("Company_Id", "company_id")]:
-                        if desk.get(src):
-                            result[dst] = int(desk[src])
-                    if desk.get("Name"):
-                        result["desk_name"] = desk["Name"]
-                    return result
-            break
-        except Exception:
+        buildings = get_json(f"Booking/GetBookableFloors?{qs}", 10)
+        if buildings is None:
             continue
+        floor_ids = [f["Floor_Id"] for bld in buildings
+                     for f in bld.get("Floors", []) if not f.get("IsDisabled")]
+        for floor_id in floor_ids:
+            desks = get_json(f"Booking/GetBookableDesks?floorId={floor_id}&{qs}", 15) or []
+            desk = next((x for x in desks if x.get("Id") == desk_id), None)
+            if desk:
+                for src, dst in [("Floor_Id", "floor_id"), ("Room_Id", "room_id"),
+                                 ("Build_Id", "build_id"), ("Company_Id", "company_id")]:
+                    if desk.get(src):
+                        result[dst] = int(desk[src])
+                if desk.get("Name"):
+                    result["desk_name"] = desk["Name"]
+                log.info("autodiscover desk %s -> %s", desk_id, result)
+                return result
+        break
 
+    log.warning("autodiscover desk %s: scrivania non trovata, risultato parziale %s",
+                desk_id, result)
     return result
 
 
@@ -391,8 +435,10 @@ async def login_and_save(playwright):
         await page.wait_for_load_state("networkidle")
         await context.storage_state(path=str(AUTH_FILE))
         await browser.close()
+        log.info("login: sessione salvata")
         print(f"Sessione salvata -> {AUTH_FILE.name}")
     except Exception as e:
+        log.exception("login fallito")
         print(f"[!] Errore durante il login: {e}")
         print("    Verifica che Chromium sia installato e che l'URL sia corretto.")
 
@@ -400,12 +446,14 @@ async def login_and_save(playwright):
 async def get_token(playwright) -> str | None:
     """Carica la home in headless, legge il token P4Y da sessionStorage."""
     if not AUTH_FILE.exists():
+        log.warning("get_token: auth_state.json assente")
         print("Sessione non trovata. Esegui prima: uv run book_desk.py --login")
         return None
 
     try:
         browser = await playwright.chromium.launch(headless=True)
     except Exception as e:
+        log.exception("get_token: Chromium non avviabile")
         print(f"[!] Impossibile avviare Chromium: {e}")
         print("    Prova: uv run playwright install chromium")
         return None
@@ -414,15 +462,19 @@ async def get_token(playwright) -> str | None:
         page    = await context.new_page()
         await page.goto(f"{UI_URL}/home", wait_until="networkidle", timeout=30_000)
         if "microsoftonline.com" in page.url:
+            log.warning("get_token: sessione scaduta (redirect a Microsoft)")
             print("Sessione scaduta -> esegui: uv run book_desk.py --login")
             return None
         token = await page.evaluate("() => sessionStorage.getItem('token')")
         if not token:
+            log.warning("get_token: token assente in sessionStorage (url=%s)", page.url)
             print("Token non trovato in sessionStorage.")
             return None
         await context.storage_state(path=str(AUTH_FILE))
+        log.info("get_token: ok")
         return token
     except Exception as e:
+        log.exception("get_token fallito")
         print(f"[!] Errore durante il recupero del token: {e}")
         print("    Se il problema persiste esegui: uv run book_desk.py --login")
         return None
@@ -433,13 +485,6 @@ async def get_token(playwright) -> str | None:
 # ═══════════════════════════════════════════════════════════
 #  API: prenotazione e check-in via requests
 # ═══════════════════════════════════════════════════════════
-
-def _headers(token: str) -> dict:
-    return {
-        "authorization": f"bearer {token}",
-        "Content-Type": "application/json",
-    }
-
 
 def api_book(token: str, target_date: date) -> bool:
     start = datetime.combine(target_date, TIME_START).strftime("%Y-%m-%dT%H:%M:%S")
@@ -456,32 +501,35 @@ def api_book(token: str, target_date: date) -> bool:
     print(f"Prenotazione {DESK_LABEL} - {target_date.strftime('%d/%m/%Y')} "
           f"[{TIME_START.strftime('%H:%M')}-{TIME_END.strftime('%H:%M')}]...", end=" ")
 
+    log.info("book %s desk=%s %s-%s (ora %s)", target_date, DESK_ID,
+             start[11:16], end[11:16], datetime.now().strftime("%H:%M"))
     try:
-        resp = requests.post(f"{API_URL}/Booking/Insert", json=payload,
-                             headers=_headers(token), timeout=15)
+        resp = _http("POST", "Booking/Insert", token, json=payload)
     except requests.exceptions.RequestException as e:
         print(f"ERRORE di rete: {e}")
         return False
 
     if resp.status_code == 200:
         booking_id = resp.text.strip()
+        log.info("book %s -> ok id=%s", target_date, booking_id)
         print(f"OK (ID={booking_id})")
         return True
 
     body = resp.text.lower()
     if "alreadybooked" in body or "piu di una" in body or "più di una" in body:
+        log.info("book %s -> gia prenotata", target_date)
         print("gia prenotata, skip.")
         return True
 
+    log.error("book %s -> errore %s", target_date, resp.status_code)
     print(f"ERRORE {resp.status_code}: {resp.text[:200]}")
     return False
 
 
 def api_checkin(token: str) -> bool:
     print(f"Check-in {DESK_LABEL} (QR: {DESK_QR_CODE})...", end=" ")
-    url  = f"{API_URL}/Booking/checkQrCode?qrCode={DESK_QR_CODE}"
     try:
-        resp = requests.get(url, headers={"authorization": f"bearer {token}"}, timeout=15)
+        resp = _http("GET", f"Booking/checkQrCode?qrCode={DESK_QR_CODE}", token)
     except requests.exceptions.RequestException as e:
         print(f"ERRORE di rete: {e}")
         return False
@@ -489,9 +537,11 @@ def api_checkin(token: str) -> bool:
     try:
         result = resp.json()
     except Exception:
+        log.error("checkin: risposta non JSON (%s)", resp.status_code)
         print(f"Risposta non JSON ({resp.status_code}): {resp.text[:100]}")
         return False
 
+    log.info("checkin %s -> %s", DESK_QR_CODE, result)
     if result.get("CheckedIn"):
         print("OK")
         return True
@@ -516,19 +566,22 @@ def api_checkin(token: str) -> bool:
 
 def _print_todays_bookings(token: str) -> None:
     """Elenca le prenotazioni di oggi dell'utente per capire perche il check-in non trova nulla."""
-    headers = {"authorization": f"bearer {token}"}
     today = date.today().isoformat()
     for date_param in (today, f"{today}T00:00:00", "undefined"):
         try:
-            resp = requests.get(f"{API_URL}/Booking/GetBookingByDay?currentDate={date_param}",
-                                headers=headers, timeout=10)
+            resp = _http("GET", f"Booking/GetBookingByDay?currentDate={date_param}",
+                         token, timeout=10)
             bookings = resp.json() if resp.status_code == 200 else None
         except Exception:
+            log.exception("GetBookingByDay")
             continue
         if isinstance(bookings, list):
             break
     else:
         return
+    log.info("prenotazioni di oggi: %s",
+             [(bk.get("Desk_Name"), str(bk.get("StartDate"))[11:16],
+               str(bk.get("EndDate"))[11:16], bk.get("Status")) for bk in bookings])
     if not bookings:
         print("    Oggi non risulta nessuna prenotazione. Prenota dal menu [1] e riprova.")
         return
@@ -559,10 +612,25 @@ def working_days_from(start: date, n: int) -> list[date]:
 #  MAIN
 # ═══════════════════════════════════════════════════════════
 
-async def main():
-    load_config()
+def _preflight_fail(*lines: str):
+    for line in lines:
+        print(line)
+    log.warning("preflight: %s", " ".join(lines))
+    sys.exit(1)
 
+
+async def main():
     args = sys.argv[1:]
+    if "--log" in args:
+        show_log()
+        sys.exit(0)
+
+    setup_logging()
+    load_config()
+    log.info("=== p4y %s | args=%s | python %s | %s", VERSION, args,
+             platform.python_version(), platform.platform())
+    log.info("config: url=%s desk=%s(%s) qr=%s floor=%s room=%s company=%s build=%s",
+             BASE_URL, DESK_LABEL, DESK_ID, DESK_QR_CODE, FLOOR_ID, ROOM_ID, COMPANY_ID, BUILD_ID)
 
     setup_mode   = "--setup"   in args
     login_mode   = "--login"   in args
@@ -580,7 +648,7 @@ async def main():
             sys.exit(1)
 
     known = {"--setup", "--login", "--book", "--checkin", "--today", "--days",
-             "--install-browser", "--help", "-h"}
+             "--install-browser", "--log", "--help", "-h"}
     unknown = [a for a in args if a.startswith("-") and a not in known]
     if unknown:
         print(f"[!] Opzione sconosciuta: {' '.join(unknown)}\n")
@@ -609,29 +677,26 @@ async def main():
             return
 
         if not CONFIG_FILE.exists():
-            print("[!] Nessuna configurazione trovata.")
-            print("    Esegui prima: uv run book_desk.py --setup")
-            sys.exit(1)
+            _preflight_fail("[!] Nessuna configurazione trovata.",
+                            "    Esegui prima: uv run book_desk.py --setup")
 
         if not BASE_URL:
-            print("[!] Configurazione incompleta: URL mancante.")
-            print("    Esegui: uv run book_desk.py --setup")
-            sys.exit(1)
+            _preflight_fail("[!] Configurazione incompleta: URL mancante.",
+                            "    Esegui: uv run book_desk.py --setup")
 
         if DESK_ID == 0 or not DESK_QR_CODE:
-            print("[!] Configurazione incompleta: scrivania non configurata.")
-            print("    Esegui: uv run book_desk.py --setup")
-            sys.exit(1)
+            _preflight_fail("[!] Configurazione incompleta: scrivania non configurata.",
+                            "    Esegui: uv run book_desk.py --setup")
 
         if book_mode and 0 in (FLOOR_ID, ROOM_ID, COMPANY_ID, BUILD_ID):
-            print("[!] Configurazione incompleta: floor/room/company/build mancanti.")
-            print("    Esegui il login (--login) e poi di nuovo --setup per rilevarli.")
-            sys.exit(1)
+            _preflight_fail("[!] Configurazione incompleta: floor/room/company/build mancanti.",
+                            "    Esegui il login (--login) e poi di nuovo --setup per rilevarli.")
 
         token = await get_token(pw)
         if not token:
             sys.exit(1)
 
+        booked_today = False
         if book_mode:
             if days_count == 1 and not today_mode:
                 d = date.today() + timedelta(days=1)
@@ -644,14 +709,29 @@ async def main():
                 days  = working_days_from(start, days_count)
                 print(f"Prenotazione {days_count} giorni: "
                       f"{days[0].strftime('%d/%m')} -> {days[-1].strftime('%d/%m/%Y')}")
-                ok = sum(api_book(token, d) for d in days)
+                results = [api_book(token, d) for d in days]
+                ok = sum(results)
                 print(f"\nRisultato: {ok}/{days_count} prenotate.")
                 if ok == 0:
                     sys.exit(1)
+                booked_today = results[0] and days[0] == date.today()
 
         if checkin_mode:
+            api_checkin(token)
+        elif booked_today and datetime.now().time() >= TIME_START:
+            print("\nPrenotazione di oggi gia iniziata: faccio subito il check-in "
+                  "(senza check-in il server la cancella in automatico).")
             api_checkin(token)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        log.info("interrotto dall'utente")
+        sys.exit(130)
+    except Exception:
+        log.exception("errore non gestito")
+        print(f"\n[!] Errore imprevisto. Dettagli in {LOG_FILE}")
+        print("    Mandami il file (o l'output di: uv run book_desk.py --log).")
+        sys.exit(1)

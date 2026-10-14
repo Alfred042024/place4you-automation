@@ -1,6 +1,7 @@
 # File locali per utente (NON committare)
 auth_state.json
 desk_config.json
+p4y.log*
 
 # Python
 __pycache__/

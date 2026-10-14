@@ -75,6 +75,7 @@ uv run book_desk.py --book --days 7   # Prenota i prossimi 7 giorni
 uv run book_desk.py --book --days 30  # Prenota i prossimi 30 giorni
 uv run book_desk.py --checkin         # Check-in oggi
 uv run book_desk.py --install-browser # Installa/verifica Chromium per Playwright
+uv run book_desk.py --log             # Mostra le ultime righe del log
 uv run book_desk.py --help            # Elenco comandi
 ```
 
@@ -120,6 +121,23 @@ Al primo avvio (`--setup`) viene creato `desk_config.json` (gitignored) con i de
 ```
 
 Nome scrivania, `company_id`, `build_id`, `floor_id` e `room_id` vengono rilevati automaticamente dall'API Place4You dopo il QR scan (serve il login SSO, che il wizard propone). L'unica cosa richiesta interattivamente è l'URL dell'istanza (se non già pre-configurato con `-Url`). Tutti i valori sono modificabili manualmente nel file dopo la configurazione.
+
+---
+
+## Check-in e cancellazione automatica
+
+Place4You cancella in automatico le prenotazioni **senza check-in** una volta passati i minuti previsti dall'azienda dall'inizio della prenotazione (di solito 30). Per questo:
+
+- una prenotazione per **oggi** fatta quando l'orario di inizio è già passato viene cancellata dopo pochi istanti se non c'è il check-in; lo script, in questo caso, fa il **check-in subito dopo la prenotazione**;
+- per le prenotazioni dei giorni successivi ricordati di fare il check-in (menu **[4]**) entro la finestra prevista.
+
+---
+
+## Log e diagnostica
+
+Ogni esecuzione scrive su `p4y.log` (nella cartella di installazione, max ~400 KB con rotazione): comando eseguito, versione, configurazione, ogni chiamata API con esito e durata, ed eventuali errori con traceback. Non vengono mai registrati token o cookie.
+
+Per leggerlo: menu **[7] Mostra log** oppure `uv run book_desk.py --log`. Se qualcosa non funziona, invia queste righe a chi mantiene il tool.
 
 ---
 
