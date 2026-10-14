@@ -112,8 +112,10 @@ def scan_qr_from_camera() -> str | None:
 
     detector = cv2.QRCodeDetector()
     print("  Inquadra il QR code della scrivania...")
-    print("  Premi  Q  per confermare / annullare.")
+    print("  Premi  ESC  per annullare.")
     found = None
+    stable = 0
+    STABLE_NEEDED = 20  # ~0.7s a 30fps
 
     while True:
         ret, frame = cap.read()
@@ -124,14 +126,24 @@ def scan_qr_from_camera() -> str | None:
         data = _decode_frame(detector, frame)
 
         if data:
+            stable += 1
             found = data.strip()
-            cv2.putText(display, f"Trovato: {found}  (premi Q)",
-                        (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 0), 2)
+            pct = min(stable, STABLE_NEEDED)
+            bar = "#" * pct + "-" * (STABLE_NEEDED - pct)
+            cv2.putText(display, f"Trovato: {found}",
+                        (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 200, 0), 2)
+            cv2.putText(display, f"[{bar}]",
+                        (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 0), 2)
+            if stable >= STABLE_NEEDED:
+                cv2.imshow("Place4You - Scansiona QR", display)
+                cv2.waitKey(400)
+                break
+        else:
+            stable = 0
 
-        cv2.imshow("Place4You - Scansiona QR  (Q = conferma/esci)", display)
-
-        key = cv2.waitKey(1) & 0xFF
-        if key in (ord("q"), ord("Q"), 27):
+        cv2.imshow("Place4You - Scansiona QR", display)
+        if cv2.waitKey(1) & 0xFF == 27:
+            found = None
             break
 
     cap.release()
@@ -156,25 +168,53 @@ def _parse_qr(raw: str) -> str | None:
     return None
 
 
+def _extract_ids(data) -> tuple[int, int] | None:
+    """Estrae (floor_id, room_id) da un dict o lista di dict."""
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    if not isinstance(data, dict):
+        return None
+    fid = (data.get("FloorId") or data.get("Floor_Id") or
+           data.get("floorId") or data.get("floor_id"))
+    rid = (data.get("RoomId")  or data.get("Room_Id")  or
+           data.get("roomId")  or data.get("room_id"))
+    if fid and rid:
+        return int(fid), int(rid)
+    return None
+
+
 def _try_autodiscover(token: str, desk_id: int) -> tuple[int, int] | None:
-    """Prova endpoint noti per recuperare floor/room ID dalla scrivania."""
+    """Prova più endpoint per recuperare floor/room ID della scrivania."""
+    qr = f"D_{desk_id}"
+    headers = {"authorization": f"bearer {token}"}
+
     candidates = [
+        # checkQrCode — endpoint sicuramente attivo, risposta può contenere i campi
+        f"{API_URL}/Booking/checkQrCode?qrCode={qr}",
+        # Booking attivo per l'utente
+        f"{API_URL}/Booking/GetActive",
+        f"{API_URL}/Booking/GetUserBookings",
+        f"{API_URL}/Booking/GetByUser",
+        # Desk info diretta
         f"{API_URL}/Desk/GetById/{desk_id}",
         f"{API_URL}/Desk/Get?id={desk_id}",
         f"{API_URL}/Desk/{desk_id}",
         f"{API_URL}/Desk/GetInfo?deskId={desk_id}",
+        f"{API_URL}/Desk/GetByQr?qrCode={qr}",
     ]
-    headers = {"authorization": f"bearer {token}"}
+
     for url in candidates:
         try:
             resp = requests.get(url, headers=headers, timeout=8)
-            if resp.status_code == 200:
+            if resp.status_code != 200:
+                continue
+            try:
                 data = resp.json()
-                if isinstance(data, dict):
-                    fid = data.get("FloorId") or data.get("Floor_Id")
-                    rid = data.get("RoomId")  or data.get("Room_Id")
-                    if fid and rid:
-                        return int(fid), int(rid)
+            except Exception:
+                continue
+            ids = _extract_ids(data)
+            if ids:
+                return ids
         except Exception:
             pass
     return None
@@ -222,43 +262,26 @@ async def setup_wizard(playwright):
         print("  [!] QR code non valido.")
         return
 
-    desk_label = input("  Nome scrivania (es. PA ABS - ABS16) [invio per usare il QR]: ").strip()
+    desk_label = input(f"  Nome scrivania (es. ABS17) [{qr_raw}]: ").strip()
     if not desk_label:
         desk_label = qr_raw
 
-    # Prova auto-discovery floor/room
+    # Prova auto-discovery floor/room; se fallisce usa i default silenziosamente
     floor_id = FLOOR_ID
     room_id  = ROOM_ID
-    auto_ok  = False
 
     if AUTH_FILE.exists():
-        print("")
-        print("  Recupero dettagli scrivania dal server...", end=" ", flush=True)
+        print("  Recupero dettagli dal server...", end=" ", flush=True)
         token = await get_token(playwright)
         if token:
             result = _try_autodiscover(token, desk_id)
             if result:
                 floor_id, room_id = result
-                auto_ok = True
                 print(f"OK  (Floor={floor_id}, Room={room_id})")
             else:
-                print("non trovati automaticamente.")
+                print(f"uso default (Floor={floor_id}, Room={room_id})")
         else:
-            print("sessione non disponibile.")
-
-    if not auto_ok:
-        print("")
-        print("  Floor ID e Room ID non rilevati automaticamente.")
-        print("  Per trovarli: apri Place4You in Chrome, fai F12 -> Network,")
-        print("  prenota una volta e cerca la chiamata a /api/Booking/Insert.")
-        print(f"  (default attuali: Floor={floor_id}, Room={room_id})")
-        print("")
-        fi = input(f"  Floor ID [{floor_id}]: ").strip()
-        ri = input(f"  Room ID  [{room_id}]: ").strip()
-        if fi:
-            floor_id = int(fi)
-        if ri:
-            room_id = int(ri)
+            print(f"sessione non disponibile, uso default (Floor={floor_id}, Room={room_id})")
 
     cfg = {
         "desk_label":   desk_label,
