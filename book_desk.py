@@ -3,6 +3,7 @@
 # dependencies = [
 #   "playwright",
 #   "requests",
+#   "opencv-python",
 # ]
 # ///
 """
@@ -73,6 +74,59 @@ def save_config(cfg: dict):
     print(f"  Config salvata in {CONFIG_FILE.name}")
 
 
+def scan_qr_from_camera() -> str | None:
+    """Apre la webcam e rileva il QR code della scrivania. Ritorna la stringa QR o None."""
+    import cv2
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("  [!] Webcam non trovata.")
+        return None
+
+    detector = cv2.QRCodeDetector()
+    print("  Inquadra il QR code della scrivania...")
+    print("  Premi  Q  per annullare.")
+    found = None
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        data, _, _ = detector.detectAndDecode(frame)
+        if data:
+            found = data.strip()
+            label = f"Trovato: {found}  (premi Q per confermare)"
+            cv2.putText(frame, label, (10, 35),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 0), 2)
+
+        cv2.imshow("Place4You - Scansiona QR (Q = conferma/esci)", frame)
+
+        key = cv2.waitKey(1) & 0xFF
+        if key in (ord("q"), ord("Q"), 27):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+    return found
+
+
+def _parse_qr(raw: str) -> str | None:
+    """Normalizza il testo del QR al formato D_XXXX."""
+    raw = raw.strip().upper()
+    # Già nel formato corretto
+    if raw.startswith("D_") and raw[2:].isdigit():
+        return raw
+    # Solo numero
+    if raw.isdigit():
+        return f"D_{raw}"
+    # URL tipo https://p4y.alveo.it/...?qr=D_4648 o .../D_4648
+    import re
+    m = re.search(r"D_(\d+)", raw)
+    if m:
+        return f"D_{m.group(1)}"
+    return None
+
+
 def _try_autodiscover(token: str, desk_id: int) -> tuple[int, int] | None:
     """Prova endpoint noti per recuperare floor/room ID dalla scrivania."""
     candidates = [
@@ -103,14 +157,36 @@ async def setup_wizard(playwright):
     print("  ║   SETUP - Configura la tua scrivania ║")
     print("  ╚══════════════════════════════════════╝")
     print("")
-    print("  Trova il codice QR stampato sulla tua scrivania.")
-    print("  Ha il formato  D_XXXX  (es. D_4648).")
+    print("  Come vuoi inserire il codice QR della scrivania?")
     print("")
+    print("  [1] Scansiona con la webcam (tieni il cartellino davanti alla camera)")
+    print("  [2] Inserisci manualmente (es. D_4648)")
+    print("")
+    modo = input("  Scelta [1/2]: ").strip()
 
-    qr_raw = input("  Codice QR: ").strip().upper()
-    if not qr_raw.startswith("D_"):
-        print("  [!] Formato non valido. Deve iniziare con D_")
-        return
+    qr_raw = None
+
+    if modo == "1":
+        scanned = scan_qr_from_camera()
+        if scanned:
+            qr_raw = _parse_qr(scanned)
+            if qr_raw:
+                print(f"  QR rilevato: {qr_raw}")
+            else:
+                print(f"  [!] QR letto ({scanned!r}) non riconosciuto come codice scrivania.")
+                print("      Prova l'inserimento manuale.")
+        else:
+            print("  Scansione annullata o webcam non disponibile.")
+
+    if not qr_raw:
+        print("")
+        print("  Inserisci il codice QR della scrivania (formato D_XXXX, es. D_4648).")
+        raw = input("  Codice QR: ").strip()
+        qr_raw = _parse_qr(raw)
+        if not qr_raw:
+            print(f"  [!] Formato non riconosciuto: {raw!r}")
+            return
+
     try:
         desk_id = int(qr_raw[2:])
     except ValueError:
