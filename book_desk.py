@@ -353,17 +353,24 @@ async def setup_wizard(playwright):
 # ═══════════════════════════════════════════════════════════
 
 async def login_and_save(playwright):
+    if not BASE_URL:
+        print("[!] URL non configurato. Esegui prima: uv run book_desk.py --setup")
+        return
     print("Apro il browser — accedi con Microsoft SSO, poi attendi il reindirizzamento.")
-    browser = await playwright.chromium.launch(headless=False)
-    context = await browser.new_context()
-    page    = await context.new_page()
-    await page.goto(f"{UI_URL}/home")
-    print("   In attesa del login (max 3 minuti)...")
-    await page.wait_for_url(f"{UI_URL}/home", timeout=180_000)
-    await page.wait_for_load_state("networkidle")
-    await context.storage_state(path=str(AUTH_FILE))
-    await browser.close()
-    print(f"Sessione salvata -> {AUTH_FILE.name}")
+    try:
+        browser = await playwright.chromium.launch(headless=False)
+        context = await browser.new_context()
+        page    = await context.new_page()
+        await page.goto(f"{UI_URL}/home")
+        print("   In attesa del login (max 3 minuti)...")
+        await page.wait_for_url(f"{UI_URL}/home", timeout=180_000)
+        await page.wait_for_load_state("networkidle")
+        await context.storage_state(path=str(AUTH_FILE))
+        await browser.close()
+        print(f"Sessione salvata -> {AUTH_FILE.name}")
+    except Exception as e:
+        print(f"[!] Errore durante il login: {e}")
+        print("    Verifica che Chromium sia installato e che l'URL sia corretto.")
 
 
 async def get_token(playwright) -> str | None:
@@ -372,11 +379,16 @@ async def get_token(playwright) -> str | None:
         print("Sessione non trovata. Esegui prima: uv run book_desk.py --login")
         return None
 
-    browser = await playwright.chromium.launch(headless=True)
+    try:
+        browser = await playwright.chromium.launch(headless=True)
+    except Exception as e:
+        print(f"[!] Impossibile avviare Chromium: {e}")
+        print("    Prova: uv run playwright install chromium")
+        return None
     context = await browser.new_context(storage_state=str(AUTH_FILE))
     page    = await context.new_page()
     try:
-        await page.goto(f"{UI_URL}/home", wait_until="networkidle")
+        await page.goto(f"{UI_URL}/home", wait_until="networkidle", timeout=30_000)
         if "microsoftonline.com" in page.url:
             print("Sessione scaduta -> esegui: uv run book_desk.py --login")
             return None
@@ -385,6 +397,9 @@ async def get_token(playwright) -> str | None:
             print("Token non trovato in sessionStorage.")
             return None
         return token
+    except Exception as e:
+        print(f"[!] Errore durante il recupero del token: {e}")
+        return None
     finally:
         await context.storage_state(path=str(AUTH_FILE))
         await browser.close()
@@ -416,8 +431,12 @@ def api_book(token: str, target_date: date) -> bool:
     print(f"Prenotazione {DESK_LABEL} - {target_date.strftime('%d/%m/%Y')} "
           f"[{TIME_START.strftime('%H:%M')}-{TIME_END.strftime('%H:%M')}]...", end=" ")
 
-    resp = requests.post(f"{API_URL}/Booking/Insert", json=payload,
-                         headers=_headers(token), timeout=15)
+    try:
+        resp = requests.post(f"{API_URL}/Booking/Insert", json=payload,
+                             headers=_headers(token), timeout=15)
+    except requests.exceptions.RequestException as e:
+        print(f"ERRORE di rete: {e}")
+        return False
 
     if resp.status_code == 200:
         booking_id = resp.text.strip()
@@ -437,7 +456,11 @@ def api_book(token: str, target_date: date) -> bool:
 def api_checkin(token: str) -> bool:
     print(f"Check-in {DESK_LABEL} (QR: {DESK_QR_CODE})...", end=" ")
     url  = f"{API_URL}/Booking/checkQrCode?qrCode={DESK_QR_CODE}"
-    resp = requests.get(url, headers={"authorization": f"bearer {token}"}, timeout=15)
+    try:
+        resp = requests.get(url, headers={"authorization": f"bearer {token}"}, timeout=15)
+    except requests.exceptions.RequestException as e:
+        print(f"ERRORE di rete: {e}")
+        return False
 
     try:
         result = resp.json()
@@ -517,6 +540,16 @@ async def main():
         if not CONFIG_FILE.exists():
             print("[!] Nessuna configurazione trovata.")
             print("    Esegui prima: uv run book_desk.py --setup")
+            sys.exit(1)
+
+        if not BASE_URL:
+            print("[!] Configurazione incompleta: URL mancante.")
+            print("    Esegui: uv run book_desk.py --setup")
+            sys.exit(1)
+
+        if DESK_ID == 0 or not DESK_QR_CODE:
+            print("[!] Configurazione incompleta: scrivania non configurata.")
+            print("    Esegui: uv run book_desk.py --setup")
             sys.exit(1)
 
         token = await get_token(pw)
