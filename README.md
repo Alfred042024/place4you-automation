@@ -95,17 +95,18 @@ Al primo avvio (`--setup`) viene creato `desk_config.json` (gitignored) con i de
 
 ```json
 {
-  "desk_label":   "ABS16",
-  "desk_id":      4648,
-  "floor_id":     324,
-  "room_id":      1130,
-  "company_id":   103,
-  "build_id":     127,
-  "desk_qr_code": "D_4648"
+  "base_url":     "https://p4y.tuaazienda.it",
+  "desk_label":   "DESK-42",
+  "desk_id":      1234,
+  "floor_id":     10,
+  "room_id":      20,
+  "company_id":   1,
+  "build_id":     1,
+  "desk_qr_code": "D_1234"
 }
 ```
 
-Il nome e l'ID scrivania vengono rilevati automaticamente dalla webcam (QR code) e dall'API Place4You. Per installazioni su reti Place4You diverse da quella predefinita, modifica `company_id` e `build_id` nel file dopo il setup.
+Il nome e l'ID scrivania vengono rilevati automaticamente dalla webcam (QR code) e dall'API Place4You. L'URL, `company_id` e `build_id` vengono chiesti durante il setup; tutti i valori sono modificabili manualmente nel file dopo la configurazione.
 
 ---
 

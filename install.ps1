@@ -126,6 +126,13 @@ Write-Host ""
 Write-Host "  Avvio il wizard di configurazione..." -ForegroundColor White
 Write-Host "  Tieni pronto il cartellino con il QR della tua scrivania." -ForegroundColor Yellow
 Write-Host ""
+
+# Pre-compila desk_config.json con l'URL Alveo cosi il wizard non lo chiede
+$configPath = Join-Path $InstallDir "desk_config.json"
+if (-not (Test-Path $configPath)) {
+    '{"base_url":"https://p4y.alveo.it"}' | Set-Content $configPath -Encoding UTF8
+}
+
 Start-Sleep -Seconds 2
 
 Push-Location $InstallDir

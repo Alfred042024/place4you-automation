@@ -31,17 +31,17 @@ from playwright.async_api import async_playwright
 #  DEFAULTS (sovrascritti da desk_config.json se presente)
 # ═══════════════════════════════════════════════════════════
 
-BASE_URL     = "https://p4y.alveo.it"
-UI_URL       = f"{BASE_URL}/ui/frontoffice"
-API_URL      = f"{BASE_URL}/api"
+BASE_URL     = ""          # impostato da desk_config.json
+UI_URL       = ""
+API_URL      = ""
 
-DESK_LABEL   = "PA ABS - ABS16"
-DESK_ID      = 4648
-FLOOR_ID     = 324
-ROOM_ID      = 1130
-COMPANY_ID   = 103
-BUILD_ID     = 127
-DESK_QR_CODE = "D_4648"
+DESK_LABEL   = ""
+DESK_ID      = 0
+FLOOR_ID     = 0
+ROOM_ID      = 0
+COMPANY_ID   = 0
+BUILD_ID     = 0
+DESK_QR_CODE = ""
 
 TIME_START   = time(9, 0)
 TIME_END     = time(18, 0)
@@ -54,11 +54,15 @@ CONFIG_FILE  = Path(__file__).parent / "desk_config.json"
 # ═══════════════════════════════════════════════════════════
 
 def load_config():
+    global BASE_URL, UI_URL, API_URL
     global DESK_LABEL, DESK_ID, FLOOR_ID, ROOM_ID, COMPANY_ID, BUILD_ID, DESK_QR_CODE
     if not CONFIG_FILE.exists():
         return
     with open(CONFIG_FILE) as f:
         cfg = json.load(f)
+    BASE_URL     = cfg.get("base_url",     BASE_URL)
+    UI_URL       = f"{BASE_URL}/ui/frontoffice"
+    API_URL      = f"{BASE_URL}/api"
     DESK_LABEL   = cfg.get("desk_label",   DESK_LABEL)
     DESK_ID      = cfg.get("desk_id",      DESK_ID)
     FLOOR_ID     = cfg.get("floor_id",     FLOOR_ID)
@@ -217,10 +221,24 @@ def _try_autodiscover(token: str, desk_id: int, qr_code: str) -> dict:
 
 
 async def setup_wizard(playwright):
+    global BASE_URL, UI_URL, API_URL
     print("")
     print("  ╔══════════════════════════════════════╗")
     print("  ║   SETUP - Configura la tua scrivania ║")
     print("  ╚══════════════════════════════════════╝")
+    print("")
+
+    # URL istanza Place4You
+    existing_url = BASE_URL or ""
+    prompt_url = f"  URL Place4You [{existing_url}]: " if existing_url else "  URL Place4You (es. https://p4y.tuaazienda.it): "
+    raw_url = input(prompt_url).strip().rstrip("/")
+    if raw_url:
+        BASE_URL = raw_url
+    elif not BASE_URL:
+        print("  [!] URL obbligatorio.")
+        return
+    UI_URL = f"{BASE_URL}/ui/frontoffice"
+    API_URL = f"{BASE_URL}/api"
     print("")
     print("  Come vuoi inserire il codice QR della scrivania?")
     print("")
@@ -284,6 +302,7 @@ async def setup_wizard(playwright):
         desk_label = confirmed
 
     cfg = {
+        "base_url":     BASE_URL,
         "desk_label":   desk_label,
         "desk_id":      desk_id,
         "floor_id":     floor_id,
