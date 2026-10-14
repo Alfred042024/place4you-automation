@@ -17,6 +17,7 @@ USO (via uv):
     uv run book_desk.py --book --days 7   # Prenota i prossimi 7 giorni lavorativi
     uv run book_desk.py --book --days 30  # Prenota i prossimi 30 giorni lavorativi
     uv run book_desk.py --checkin         # Check-in oggi
+    uv run book_desk.py --install-browser # Installa Chromium per Playwright
 """
 
 import asyncio
@@ -43,6 +44,8 @@ COMPANY_ID   = 0
 BUILD_ID     = 0
 DESK_QR_CODE = ""
 
+REQUIRED_IDS = ("desk_id", "floor_id", "room_id", "company_id", "build_id")
+
 TIME_START   = time(9, 0)
 TIME_END     = time(18, 0)
 
@@ -59,11 +62,14 @@ def load_config():
     if not CONFIG_FILE.exists():
         return
     try:
-        with open(CONFIG_FILE) as f:
+        with open(CONFIG_FILE, encoding="utf-8-sig") as f:
             cfg = json.load(f)
-    except (json.JSONDecodeError, ValueError):
+        if not isinstance(cfg, dict):
+            raise ValueError("config non e un oggetto JSON")
+    except (OSError, ValueError) as e:
+        print(f"[!] {CONFIG_FILE.name} non leggibile ({e}). Esegui: uv run book_desk.py --setup")
         return
-    BASE_URL     = cfg.get("base_url",     BASE_URL)
+    BASE_URL     = cfg.get("base_url",     BASE_URL).rstrip("/")
     UI_URL       = f"{BASE_URL}/ui/frontoffice"
     API_URL      = f"{BASE_URL}/api"
     DESK_LABEL   = cfg.get("desk_label",   DESK_LABEL)
@@ -76,7 +82,7 @@ def load_config():
 
 
 def save_config(cfg: dict):
-    with open(CONFIG_FILE, "w") as f:
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
     print(f"  Config salvata in {CONFIG_FILE.name}")
 
@@ -84,7 +90,6 @@ def save_config(cfg: dict):
 def _decode_frame(detector, frame):
     """Prova più strategie per decodificare un QR blu su sfondo bianco/chiaro."""
     import cv2
-    import numpy as np
 
     candidates = []
 
@@ -296,6 +301,12 @@ async def setup_wizard(playwright):
     build_id   = BUILD_ID
     desk_label = qr_raw
 
+    if not AUTH_FILE.exists():
+        print("")
+        print("  Per leggere i dettagli della scrivania serve il login Microsoft.")
+        if input("  Eseguire il login adesso? [S/N]: ").strip().upper() == "S":
+            await login_and_save(playwright)
+
     if AUTH_FILE.exists():
         print("  Recupero dettagli dal server...", end=" ", flush=True)
         token = await get_token(playwright)
@@ -338,6 +349,11 @@ async def setup_wizard(playwright):
     for k, v in cfg.items():
         print(f"  │  {k:<14} {str(v):<22}│")
     print("  └─────────────────────────────────────┘")
+    missing = [k for k in REQUIRED_IDS if not cfg.get(k)]
+    if missing:
+        print("")
+        print(f"  [!] Non rilevati: {', '.join(missing)}.")
+        print("      Fai il login e rilancia --setup, oppure compilali a mano in desk_config.json.")
     print("")
 
     confirm = input("  Salvare? [S/N]: ").strip().upper()
@@ -385,9 +401,9 @@ async def get_token(playwright) -> str | None:
         print(f"[!] Impossibile avviare Chromium: {e}")
         print("    Prova: uv run playwright install chromium")
         return None
-    context = await browser.new_context(storage_state=str(AUTH_FILE))
-    page    = await context.new_page()
     try:
+        context = await browser.new_context(storage_state=str(AUTH_FILE))
+        page    = await context.new_page()
         await page.goto(f"{UI_URL}/home", wait_until="networkidle", timeout=30_000)
         if "microsoftonline.com" in page.url:
             print("Sessione scaduta -> esegui: uv run book_desk.py --login")
@@ -396,12 +412,13 @@ async def get_token(playwright) -> str | None:
         if not token:
             print("Token non trovato in sessionStorage.")
             return None
+        await context.storage_state(path=str(AUTH_FILE))
         return token
     except Exception as e:
         print(f"[!] Errore durante il recupero del token: {e}")
+        print("    Se il problema persiste esegui: uv run book_desk.py --login")
         return None
     finally:
-        await context.storage_state(path=str(AUTH_FILE))
         await browser.close()
 
 
@@ -444,8 +461,7 @@ def api_book(token: str, target_date: date) -> bool:
         return True
 
     body = resp.text.lower()
-    if "alreadybooked" in body or "piu di una" in body or "più di una" in body \
-            or "desknotavailable" in body:
+    if "alreadybooked" in body or "piu di una" in body or "più di una" in body:
         print("gia prenotata, skip.")
         return True
 
@@ -523,9 +539,24 @@ async def main():
             print("Usa: --days <numero>  (es. --days 7)")
             sys.exit(1)
 
+    known = {"--setup", "--login", "--book", "--checkin", "--today", "--days",
+             "--install-browser", "--help", "-h"}
+    unknown = [a for a in args if a.startswith("-") and a not in known]
+    if unknown:
+        print(f"[!] Opzione sconosciuta: {' '.join(unknown)}\n")
+        print(__doc__)
+        sys.exit(2)
+    if "--help" in args or "-h" in args:
+        print(__doc__)
+        sys.exit(0)
+
+    if "--install-browser" in args:
+        import subprocess
+        sys.exit(subprocess.call([sys.executable, "-m", "playwright", "install", "chromium"]))
+
     if not any([setup_mode, login_mode, book_mode, checkin_mode]):
-        book_mode    = True
-        checkin_mode = True
+        print(__doc__)
+        sys.exit(2)
 
     async with async_playwright() as pw:
 
@@ -550,6 +581,11 @@ async def main():
         if DESK_ID == 0 or not DESK_QR_CODE:
             print("[!] Configurazione incompleta: scrivania non configurata.")
             print("    Esegui: uv run book_desk.py --setup")
+            sys.exit(1)
+
+        if book_mode and 0 in (FLOOR_ID, ROOM_ID, COMPANY_ID, BUILD_ID):
+            print("[!] Configurazione incompleta: floor/room/company/build mancanti.")
+            print("    Esegui il login (--login) e poi di nuovo --setup per rilevarli.")
             sys.exit(1)
 
         token = await get_token(pw)

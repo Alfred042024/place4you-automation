@@ -5,10 +5,21 @@ $ScriptDir = $PSScriptRoot
 $PyScript  = Join-Path $ScriptDir "book_desk.py"
 $AuthFile  = Join-Path $ScriptDir "auth_state.json"
 
+function Get-DeskLabel {
+    $cfgPath = Join-Path $ScriptDir "desk_config.json"
+    if (-not (Test-Path $cfgPath)) { return "da configurare" }
+    try {
+        $cfg = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($cfg.desk_label) { return [string]$cfg.desk_label }
+    } catch { }
+    return "da configurare"
+}
+
 function Write-Title {
+    $label = Get-DeskLabel
     Write-Host ""
     Write-Host "  +--------------------------------------+" -ForegroundColor Cyan
-    Write-Host "  |   Place4You  -  Scrivania ABS16      |" -ForegroundColor Cyan
+    Write-Host ("  |   Place4You  -  {0,-20}|" -f ("Scrivania " + $label)) -ForegroundColor Cyan
     Write-Host "  +--------------------------------------+" -ForegroundColor Cyan
     if (Test-Path $AuthFile) {
         Write-Host "  [OK] sessione presente" -ForegroundColor Green
@@ -25,24 +36,10 @@ function Run-Py {
 }
 
 function Ensure-Chromium {
-    $chromePath = "$env:LOCALAPPDATA\ms-playwright\chromium-1243\chrome-win64\chrome.exe"
-    if (Test-Path $chromePath) { return }
-    Write-Host "  Prima esecuzione: installo Chromium (~200 MB)..." -ForegroundColor Yellow
-    $envDir = "$env:LOCALAPPDATA\uv\cache\environments-v2"
-    $uvEnv  = Get-ChildItem $envDir -Filter "book-desk-*" |
-              Sort-Object LastWriteTime -Descending |
-              Select-Object -First 1
-    if ($null -eq $uvEnv) {
-        Write-Host "  Inizializzo ambiente uv..." -ForegroundColor Yellow
-        & uv run --no-project $PyScript --help 2>$null
-        $uvEnv = Get-ChildItem $envDir -Filter "book-desk-*" |
-                 Sort-Object LastWriteTime -Descending |
-                 Select-Object -First 1
-    }
-    if ($null -ne $uvEnv) {
-        & "$($uvEnv.FullName)\Scripts\python.exe" -m playwright install chromium
-    } else {
-        Write-Host "  [!] Impossibile trovare l'ambiente uv. Esegui: uv run book_desk.py --login" -ForegroundColor Red
+    # Idempotente: se Chromium e gia presente playwright esce subito.
+    & uv run $PyScript --install-browser | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [!] Installazione Chromium non riuscita. Riprova: uv run book_desk.py --install-browser" -ForegroundColor Red
     }
 }
 
