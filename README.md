@@ -39,8 +39,10 @@ Lo script installa tutto da zero:
 2. Questa repository in `%USERPROFILE%\place4you-automation`
 3. Chromium per Playwright
 4. Collegamento **Place4You** sul desktop
-5. Wizard di configurazione → inquadra il QR della tua scrivania con la webcam
-6. Login SSO Microsoft
+5. Wizard di configurazione: inquadra il QR della tua scrivania con la webcam
+6. Login SSO Microsoft (proposto dal wizard, serve per rilevare piano e stanza)
+
+Rieseguire lo stesso comando aggiorna l'installazione esistente (se installata con git).
 
 ---
 
@@ -50,7 +52,7 @@ Lo script installa tutto da zero:
 
 ```
   +--------------------------------------+
-  |   Place4You  -  Scrivania ABS16      |
+  |   Place4You  -  Scrivania DESK-42    |
   +--------------------------------------+
   [OK] sessione presente
 
@@ -72,7 +74,11 @@ uv run book_desk.py --book --today    # Prenota oggi
 uv run book_desk.py --book --days 7   # Prenota i prossimi 7 giorni
 uv run book_desk.py --book --days 30  # Prenota i prossimi 30 giorni
 uv run book_desk.py --checkin         # Check-in oggi
+uv run book_desk.py --install-browser # Installa/verifica Chromium per Playwright
+uv run book_desk.py --help            # Elenco comandi
 ```
+
+Senza opzioni (o con opzioni sconosciute) lo script stampa l'elenco dei comandi e **non** prenota nulla.
 
 ---
 
@@ -113,7 +119,20 @@ Al primo avvio (`--setup`) viene creato `desk_config.json` (gitignored) con i de
 }
 ```
 
-Nome scrivania, `company_id`, `build_id`, `floor_id` e `room_id` vengono rilevati automaticamente dall'API Place4You dopo il QR scan. L'unica cosa richiesta interattivamente è l'URL dell'istanza (se non già pre-configurato con `-Url`). Tutti i valori sono modificabili manualmente nel file dopo la configurazione.
+Nome scrivania, `company_id`, `build_id`, `floor_id` e `room_id` vengono rilevati automaticamente dall'API Place4You dopo il QR scan (serve il login SSO, che il wizard propone). L'unica cosa richiesta interattivamente è l'URL dell'istanza (se non già pre-configurato con `-Url`). Tutti i valori sono modificabili manualmente nel file dopo la configurazione.
+
+---
+
+## Problemi comuni
+
+| Messaggio | Cosa fare |
+|-----------|-----------|
+| `Sessione scaduta` / `Sessione non trovata` | Menu **[5] Login SSO** (o `--login`) |
+| `Configurazione incompleta: floor/room/company/build mancanti` | Fai il login, poi menu **[6] Configura scrivania** per rilevarli di nuovo |
+| `desk_config.json non leggibile` | Cancella il file e rilancia **[6] Configura scrivania** |
+| `Webcam non trovata` | Nel wizard scegli l'inserimento manuale del codice (es. `D_4648`) |
+| `Impossibile avviare Chromium` | `uv run book_desk.py --install-browser` |
+| Cambio scrivania | Menu **[6] Configura scrivania** |
 
 ---
 
