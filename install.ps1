@@ -77,10 +77,12 @@ if (Test-Path $InstallDir) {
         $zip = "$env:TEMP\place4you.zip"
         Invoke-WebRequest -Uri "https://github.com/Alfred042024/place4you-automation/archive/refs/heads/master.zip" `
                           -OutFile $zip -UseBasicParsing
-        Expand-Archive -Path $zip -DestinationPath "$env:TEMP\place4you-extract" -Force
-        $extracted = Get-ChildItem "$env:TEMP\place4you-extract" | Select-Object -First 1
+        $extractDir = "$env:TEMP\place4you-extract"
+        Expand-Archive -Path $zip -DestinationPath $extractDir -Force
+        $extracted = Get-ChildItem $extractDir | Select-Object -First 1
         Move-Item $extracted.FullName $InstallDir -Force
         Remove-Item $zip -Force
+        Remove-Item $extractDir -Recurse -Force
     }
 
     if (-not (Test-Path $InstallDir)) {
