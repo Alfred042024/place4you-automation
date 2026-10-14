@@ -31,7 +31,7 @@ irm https://raw.githubusercontent.com/Alfred042024/place4you-automation/master/i
 Se il tuo amministratore ti ha fornito un URL pre-configurato, usa invece il comando che ti ha mandato, che avrà questa forma:
 
 ```powershell
-$env:P4Y_URL="https://p4y.tuaazienda.it"; irm https://raw.githubusercontent.com/Alfred042024/place4you-automation/master/install.ps1 | iex
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Alfred042024/place4you-automation/master/install.ps1'))) -Url "https://p4y.tuaazienda.it"
 ```
 
 Lo script installa tutto da zero:

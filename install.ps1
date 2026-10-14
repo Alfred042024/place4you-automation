@@ -5,13 +5,19 @@
 .DESCRIPTION
     Scarica la repo, installa uv se mancante, crea il collegamento
     sul desktop e avvia il wizard di configurazione scrivania.
+.PARAMETER Url
+    URL dell'istanza Place4You (es. https://p4y.tuaazienda.it).
+    Se omesso, viene chiesto durante il setup.
 .EXAMPLE
     # Generico (chiede l'URL durante il setup):
     irm https://raw.githubusercontent.com/Alfred042024/place4you-automation/master/install.ps1 | iex
 
     # Con URL pre-configurato (nessuna domanda sull'URL):
-    $env:P4Y_URL="https://p4y.tuaazienda.it"; irm https://raw.githubusercontent.com/Alfred042024/place4you-automation/master/install.ps1 | iex
+    & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Alfred042024/place4you-automation/master/install.ps1'))) -Url "https://p4y.tuaazienda.it"
 #>
+param(
+    [string]$Url = ""
+)
 
 $RepoUrl    = "https://github.com/Alfred042024/place4you-automation.git"
 $InstallDir = "$env:USERPROFILE\place4you-automation"
@@ -131,12 +137,12 @@ Write-Host "  Avvio il wizard di configurazione..." -ForegroundColor White
 Write-Host "  Tieni pronto il cartellino con il QR della tua scrivania." -ForegroundColor Yellow
 Write-Host ""
 
-# Se P4Y_URL e definito (passato prima del pipe), pre-compila la config
+# Se -Url e passato come flag, pre-compila la config
 # cosi il wizard non chiede l'URL interattivamente
 $configPath = Join-Path $InstallDir "desk_config.json"
-if ($env:P4Y_URL -and -not (Test-Path $configPath)) {
-    Write-Step "Pre-configurazione URL: $($env:P4Y_URL)"
-    "{`"base_url`":`"$($env:P4Y_URL)`"}" | Set-Content $configPath -Encoding UTF8
+if ($Url -and -not (Test-Path $configPath)) {
+    Write-Step "Pre-configurazione URL: $Url"
+    "{`"base_url`":`"$Url`"}" | Set-Content $configPath -Encoding UTF8
     Write-Ok "URL impostato."
 }
 
