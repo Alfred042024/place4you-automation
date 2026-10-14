@@ -1,8 +1,25 @@
-# Place4You – Automazione prenotazione scrivania
+# Place4You Automation
 
-Script per prenotare e fare il check-in della propria scrivania su [Place4You (p4y.alveo.it)](https://p4y.alveo.it) senza dover aprire il browser ogni volta.
+> Prenota la tua scrivania e fai il check-in su **Place4You** senza aprire il browser — da riga di comando o con un doppio click sul desktop.
 
-## Installazione (un solo comando)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
+[![uv](https://img.shields.io/badge/uv-package%20manager-purple)](https://docs.astral.sh/uv/)
+[![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)](https://www.microsoft.com/windows)
+
+---
+
+## Funzionalità
+
+- **Prenotazione** della propria scrivania per oggi, domani o più giorni in avanti
+- **Check-in** tramite QR code senza dover usare lo smartphone
+- **Login SSO** Microsoft / Azure AD — zero password da salvare
+- **Setup guidato**: inquadri il QR sulla scrivania con la webcam, il resto è automatico
+- **Menu interattivo** PowerShell per uso quotidiano
+
+---
+
+## Installazione rapida (Windows)
 
 Apri **PowerShell** e incolla:
 
@@ -10,92 +27,108 @@ Apri **PowerShell** e incolla:
 irm https://raw.githubusercontent.com/Alfred042024/place4you-automation/master/install.ps1 | iex
 ```
 
-Lo script:
-1. Installa **uv** se non presente
-2. Scarica questo repository in `%USERPROFILE%\place4you-automation`
-3. Installa Chromium per Playwright
-4. Crea il collegamento **Place4You** sul desktop
-5. Avvia il wizard di configurazione → inquadri il QR della tua scrivania con la webcam
-6. Chiede di fare il login SSO Microsoft
-
-Dopo l'installazione usa il collegamento sul desktop.
+Lo script installa tutto da zero:
+1. [**uv**](https://docs.astral.sh/uv/) (gestore Python, se non presente)
+2. Questa repository in `%USERPROFILE%\place4you-automation`
+3. Chromium per Playwright
+4. Collegamento **Place4You** sul desktop
+5. Wizard di configurazione → inquadra il QR della tua scrivania con la webcam
+6. Login SSO Microsoft
 
 ---
 
-## Setup manuale (alternativa)
-
-### Prerequisiti
-
-- **Windows 10/11**
-- [**uv**](https://docs.astral.sh/uv/getting-started/installation/) — gestore Python ultrarapido
-
-### Setup per una nuova scrivania
-
-1. Clona o scarica questo repository.
-
-2. Apri `book_desk.py` e modifica le costanti di configurazione nella sezione `CONFIGURAZIONE`:
-
-   ```python
-   DESK_LABEL   = "PA ABS - ABS16"   # Etichetta del posto (solo per i log)
-   DESK_ID      = 4648               # ID numerico scrivania (vedi URL su Place4You)
-   FLOOR_ID     = 324                # ID piano
-   ROOM_ID      = 1130               # ID stanza
-   COMPANY_ID   = 103                # ID azienda (invariato per Alveo)
-   BUILD_ID     = 127                # ID edificio (invariato per Milano)
-   DESK_QR_CODE = "D_4648"           # Codice QR scrivania (D_<DESK_ID>)
-   ```
-
-   > **Come trovare i tuoi ID**: apri Place4You nel browser, seleziona la tua scrivania,
-   > e guarda la chiamata `POST /api/Booking/Insert` negli strumenti sviluppatore (F12 → Network).
-   > Troverai tutti gli ID nel payload JSON.
-
-3. Esegui il **login SSO** (una sola volta, o quando la sessione scade):
-   ```
-   uv run book_desk.py --login
-   ```
-   Si aprirà un browser — accedi con Microsoft, poi chiudi quando vieni reindirizzato alla home.
-
 ## Utilizzo
 
-### Menu interattivo (consigliato)
+### Menu interattivo (doppio click sul desktop)
 
-Doppio clic sul collegamento **Place4You.lnk** sul desktop, oppure:
-```powershell
-.\p4y.ps1
+```
+  +--------------------------------------+
+  |   Place4You  -  Scrivania ABS16      |
+  +--------------------------------------+
+  [OK] sessione presente
+
+  [1] Prenota oggi
+  [2] Prenota 7 giorni lavorativi
+  [3] Prenota 30 giorni lavorativi
+  [4] Check-in oggi
+  [5] Login SSO (primo setup o sessione scaduta)
+  [6] Configura scrivania (prima installazione)
 ```
 
 ### Riga di comando
 
 ```powershell
+uv run book_desk.py --setup           # Configura la tua scrivania (una volta)
+uv run book_desk.py --login           # Login SSO Microsoft
 uv run book_desk.py --book            # Prenota il prossimo giorno lavorativo
 uv run book_desk.py --book --today    # Prenota oggi
-uv run book_desk.py --book --days 7   # Prenota i prossimi 7 giorni lavorativi
-uv run book_desk.py --book --days 30  # Prenota i prossimi 30 giorni lavorativi
+uv run book_desk.py --book --days 7   # Prenota i prossimi 7 giorni
+uv run book_desk.py --book --days 30  # Prenota i prossimi 30 giorni
 uv run book_desk.py --checkin         # Check-in oggi
-uv run book_desk.py --login           # (ri)effettua il login SSO
 ```
 
-## Collegamento sul desktop
+---
 
-Crea un file `.lnk` con:
-- **Destinazione**: `powershell.exe`
-- **Argomenti**: `-NoProfile -ExecutionPolicy Bypass -File "C:\path\to\p4y.ps1"`
-- **Cartella di avvio**: `C:\path\to\` (cartella dello script)
+## Come funziona
 
-Oppure esegui in PowerShell (adatta il percorso):
+Il sito Place4You è una **Single Page Application Angular** con autenticazione Microsoft Entra (Azure AD).
 
-```powershell
-$ws  = New-Object -ComObject WScript.Shell
-$lnk = $ws.CreateShortcut("$env:USERPROFILE\Desktop\Place4You.lnk")
-$lnk.TargetPath       = "powershell.exe"
-$lnk.Arguments        = '-NoProfile -ExecutionPolicy Bypass -File "C:\percorso\p4y.ps1"'
-$lnk.WorkingDirectory = "C:\percorso\"
-$lnk.Save()
+```
+Login SSO Microsoft
+       │
+       ▼
+POST /api/user/GetUserTokenByAzureToken   ← token P4Y
+       │
+       ├──▶ POST /api/Booking/Insert        ← prenotazione
+       └──▶ GET  /api/Booking/checkQrCode   ← check-in
 ```
 
-## Note
+Playwright viene usato **solo** per eseguire il login SSO e leggere il token da `sessionStorage`. Tutte le operazioni successive avvengono via `requests` (niente browser aperto).
 
-- `auth_state.json` viene creato al primo login e contiene i cookie di sessione Microsoft.
-  **Non condividere questo file** — è nel `.gitignore`.
-- La sessione dura di solito qualche settimana; quando scade, riesegui `--login`.
-- Il check-in è possibile solo nelle ore in cui la prenotazione è attiva.
+La sessione viene salvata in `auth_state.json` (gitignored) e riutilizzata automaticamente. Dura alcune settimane; quando scade basta rieseguire `--login`.
+
+---
+
+## Configurazione
+
+Al primo avvio (`--setup`) viene creato `desk_config.json` (gitignored) con i dettagli della tua scrivania:
+
+```json
+{
+  "desk_label":   "ABS16",
+  "desk_id":      4648,
+  "floor_id":     324,
+  "room_id":      1130,
+  "company_id":   103,
+  "build_id":     127,
+  "desk_qr_code": "D_4648"
+}
+```
+
+Il nome e l'ID scrivania vengono rilevati automaticamente dalla webcam (QR code) e dall'API Place4You. Per installazioni su reti Place4You diverse da quella predefinita, modifica `company_id` e `build_id` nel file dopo il setup.
+
+---
+
+## File
+
+| File | Descrizione |
+|------|-------------|
+| `book_desk.py` | Script principale (Python + uv inline deps) |
+| `p4y.ps1` | Menu interattivo PowerShell |
+| `install.ps1` | Installer one-liner |
+| `auth_state.json` | Sessione Microsoft (gitignored, creato da `--login`) |
+| `desk_config.json` | Config scrivania personale (gitignored, creato da `--setup`) |
+
+---
+
+## Requisiti
+
+- Windows 10 / 11
+- [uv](https://docs.astral.sh/uv/) (installato automaticamente dall'installer)
+- Account Microsoft con accesso a Place4You
+
+---
+
+## Licenza
+
+[MIT](LICENSE) — © 2026 Gabriele De Prisco
